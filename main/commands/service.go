@@ -321,7 +321,7 @@ func replaceRayDNSStrategy(conf []byte, ipv6 bool) (replacedConf []byte, err err
 		return nil, e.New("unsupported core type " + builds.Config.XrayHelper.CoreType).WithPrefix(tagService)
 	}
 	// marshal
-	marshal, err := json.MarshalIndent(jsonMap, "", "    ")
+	marshal, err := json.MarshalIndent(jsonMap, "", "  ")
 	if err != nil {
 		return nil, e.New("marshal config json failed, ", err).WithPrefix(tagService)
 	}
