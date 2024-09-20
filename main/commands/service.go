@@ -389,7 +389,7 @@ func replaceRayDNSStrategy(conf []byte, ipv6 bool) (replacedConf []byte, err err
 		}
 		jsonMap.Set("dns", dnsMap)
 		// marshal
-		marshal, err := json.MarshalIndent(jsonMap, "", "    ")
+		marshal, err := json.MarshalIndent(jsonMap, "", "  ")
 		if err != nil {
 			return nil, e.New("marshal config json failed, ", err).WithPrefix(tagService)
 		}

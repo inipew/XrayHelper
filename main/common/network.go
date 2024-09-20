@@ -17,7 +17,7 @@ import (
 const (
 	tagNetwork = "network"
 	timeout    = 3000
-	dns        = "223.5.5.5:53"
+	dns        = "1.1.1.1:53"
 )
 
 // getHttpClient get a http client with custom dns
