@@ -70,8 +70,11 @@ func deleteDummyRoute() {
 }
 
 func createDummyOutputChain() error {
-	if err := common.Ipt6.NewChain("mangle", "DUMMY"); err != nil {
-		return e.New("create ipv6 mangle chain DUMMY failed, ", err).WithPrefix(tagDummy)
+	if common.Ipt6 == nil {
+		return e.New("get ip6tables failed").WithPrefix(tagDummy)
+	}
+	if err := common.EnsureChain(common.Ipt6, "mangle", "DUMMY"); err != nil {
+		return e.New("prepare ipv6 mangle chain DUMMY failed, ", err).WithPrefix(tagDummy)
 	}
 	if err := common.Ipt6.Append("mangle", "DUMMY", "-p", "tcp", "-j", "MARK", "--set-xmark", common.DummyMarkId); err != nil {
 		return e.New("set mark on tcp mangle chain DUMMY failed, ", err).WithPrefix(tagDummy)
@@ -79,15 +82,18 @@ func createDummyOutputChain() error {
 	if err := common.Ipt6.Append("mangle", "DUMMY", "-p", "udp", "-j", "MARK", "--set-xmark", common.DummyMarkId); err != nil {
 		return e.New("set mark on udp mangle chain DUMMY failed, ", err).WithPrefix(tagDummy)
 	}
-	if err := common.Ipt6.Append("mangle", "OUTPUT", "-j", "DUMMY"); err != nil {
+	if err := common.EnsureAppend(common.Ipt6, "mangle", "OUTPUT", "-j", "DUMMY"); err != nil {
 		return e.New("apply ipv6 mangle chain DUMMY on OUTPUT failed, ", err).WithPrefix(tagDummy)
 	}
 	return nil
 }
 
 func createDummyPreroutingChain() error {
-	if err := common.Ipt6.NewChain("mangle", "XD"); err != nil {
-		return e.New("create ipv6 mangle chain XD failed, ", err).WithPrefix(tagDummy)
+	if common.Ipt6 == nil {
+		return e.New("get ip6tables failed").WithPrefix(tagDummy)
+	}
+	if err := common.EnsureChain(common.Ipt6, "mangle", "XD"); err != nil {
+		return e.New("prepare ipv6 mangle chain XD failed, ", err).WithPrefix(tagDummy)
 	}
 	if err := common.Ipt6.Append("mangle", "XD", "-i", common.DummyDevice, "-p", "tcp", "-j", "TPROXY", "--on-ip", "::", "--on-port", builds.Config.Proxy.TproxyPort, "--tproxy-mark", common.DummyMarkId); err != nil {
 		return e.New("set mark on tcp mangle chain XD failed, ", err).WithPrefix(tagDummy)
@@ -95,7 +101,7 @@ func createDummyPreroutingChain() error {
 	if err := common.Ipt6.Append("mangle", "XD", "-i", common.DummyDevice, "-p", "udp", "-j", "TPROXY", "--on-ip", "::", "--on-port", builds.Config.Proxy.TproxyPort, "--tproxy-mark", common.DummyMarkId); err != nil {
 		return e.New("set mark on udp mangle chain XD failed, ", err).WithPrefix(tagDummy)
 	}
-	if err := common.Ipt6.Append("mangle", "PREROUTING", "-j", "XD"); err != nil {
+	if err := common.EnsureAppend(common.Ipt6, "mangle", "PREROUTING", "-j", "XD"); err != nil {
 		return e.New("apply ipv6 mangle chain XD on PREROUTING failed, ", err).WithPrefix(tagDummy)
 	}
 	return nil

@@ -259,8 +259,8 @@ func createProxyChain(ipv6 bool) error {
 	if currentIpt == nil {
 		return e.New("get iptables failed").WithPrefix(tagTun)
 	}
-	if err := currentIpt.NewChain("mangle", "XT"); err != nil {
-		return e.New("create "+currentProto+" mangle chain XT failed, ", err).WithPrefix(tagTun)
+	if err := common.EnsureChain(currentIpt, "mangle", "XT"); err != nil {
+		return e.New("prepare "+currentProto+" mangle chain XT failed, ", err).WithPrefix(tagTun)
 	}
 	// bypass tun2socks
 	if err := currentIpt.Append("mangle", "XT", "-o", builds.Config.Proxy.TunDevice, "-j", "RETURN"); err != nil {
@@ -368,7 +368,7 @@ func createProxyChain(ipv6 bool) error {
 		}
 	}
 	// apply rules to OUTPUT
-	if err := currentIpt.Insert("mangle", "OUTPUT", 1, "-j", "XT"); err != nil {
+	if err := common.EnsureInsert(currentIpt, "mangle", "OUTPUT", 1, "-j", "XT"); err != nil {
 		return e.New("apply mangle chain XT to OUTPUT failed, ", err).WithPrefix(tagTun)
 	}
 	return nil
@@ -386,8 +386,8 @@ func createMangleChain(ipv6 bool) error {
 	if currentIpt == nil {
 		return e.New("get iptables failed").WithPrefix(tagTun)
 	}
-	if err := currentIpt.NewChain("mangle", "TUN2SOCKS"); err != nil {
-		return e.New("create "+currentProto+" mangle chain TUN2SOCKS failed, ", err).WithPrefix(tagTun)
+	if err := common.EnsureChain(currentIpt, "mangle", "TUN2SOCKS"); err != nil {
+		return e.New("prepare "+currentProto+" mangle chain TUN2SOCKS failed, ", err).WithPrefix(tagTun)
 	}
 	// bypass intraNet list
 	if currentProto == "ipv4" {
@@ -445,7 +445,7 @@ func createMangleChain(ipv6 bool) error {
 		}
 	}
 	// apply rules to PREROUTING
-	if err := currentIpt.Insert("mangle", "PREROUTING", 1, "-j", "TUN2SOCKS"); err != nil {
+	if err := common.EnsureInsert(currentIpt, "mangle", "PREROUTING", 1, "-j", "TUN2SOCKS"); err != nil {
 		return e.New("apply mangle chain TUN2SOCKS to PREROUTING failed, ", err).WithPrefix(tagTun)
 	}
 	return nil

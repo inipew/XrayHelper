@@ -148,8 +148,8 @@ func createProxyChain(ipv6 bool) error {
 	if currentIpt == nil {
 		return e.New("get iptables failed").WithPrefix(tagTproxy)
 	}
-	if err := currentIpt.NewChain("mangle", "PROXY"); err != nil {
-		return e.New("create "+currentProto+" mangle chain PROXY failed, ", err).WithPrefix(tagTproxy)
+	if err := common.EnsureChain(currentIpt, "mangle", "PROXY"); err != nil {
+		return e.New("prepare "+currentProto+" mangle chain PROXY failed, ", err).WithPrefix(tagTproxy)
 	}
 	// bypass dummy
 	if currentProto == "ipv6" && common.UseDummy {
@@ -259,7 +259,7 @@ func createProxyChain(ipv6 bool) error {
 		}
 	}
 	// apply rules to OUTPUT
-	if err := currentIpt.Insert("mangle", "OUTPUT", 1, "-j", "PROXY"); err != nil {
+	if err := common.EnsureInsert(currentIpt, "mangle", "OUTPUT", 1, "-j", "PROXY"); err != nil {
 		return e.New("apply mangle chain PROXY to OUTPUT failed, ", err).WithPrefix(tagTproxy)
 	}
 	return nil
@@ -276,8 +276,8 @@ func createMangleChain(ipv6 bool) error {
 	if currentIpt == nil {
 		return e.New("get iptables failed").WithPrefix(tagTproxy)
 	}
-	if err := currentIpt.NewChain("mangle", "XRAY"); err != nil {
-		return e.New("create "+currentProto+" mangle chain XRAY failed, ", err).WithPrefix(tagTproxy)
+	if err := common.EnsureChain(currentIpt, "mangle", "XRAY"); err != nil {
+		return e.New("prepare "+currentProto+" mangle chain XRAY failed, ", err).WithPrefix(tagTproxy)
 	}
 	// bypass intraNet list
 	if currentProto == "ipv4" {
@@ -342,7 +342,7 @@ func createMangleChain(ipv6 bool) error {
 		}
 	}
 	// apply rules to PREROUTING
-	if err := currentIpt.Insert("mangle", "PREROUTING", 1, "-j", "XRAY"); err != nil {
+	if err := common.EnsureInsert(currentIpt, "mangle", "PREROUTING", 1, "-j", "XRAY"); err != nil {
 		return e.New("apply mangle chain XRAY to PREROUTING failed, ", err).WithPrefix(tagTproxy)
 	}
 	return nil
