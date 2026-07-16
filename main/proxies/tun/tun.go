@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/singchia/go-xtables/iptables"
+	"github.com/singchia/go-xtables/pkg/network"
 	"gopkg.in/yaml.v3"
 )
 
@@ -259,44 +261,47 @@ func createProxyChain(ipv6 bool) error {
 	if currentIpt == nil {
 		return e.New("get iptables failed").WithPrefix(tagTun)
 	}
-	if err := currentIpt.NewChain("mangle", "XT"); err != nil {
+	chain := iptables.ChainTypeUserDefined
+	chain.SetName("XT")
+	if err := currentIpt.Table(iptables.TableTypeMangle).NewChain("XT"); err != nil {
 		return e.New("create "+currentProto+" mangle chain XT failed, ", err).WithPrefix(tagTun)
 	}
 	// bypass tun2socks
-	if err := currentIpt.Append("mangle", "XT", "-o", builds.Config.Proxy.TunDevice, "-j", "RETURN"); err != nil {
+	if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchOutInterface(false, builds.Config.Proxy.TunDevice).TargetReturn().Append(); err != nil {
 		return e.New("ignore tun2socks interface "+builds.Config.Proxy.TunDevice+" on "+currentProto+" mangle chain XT failed, ", err).WithPrefix(tagTun)
 	}
 	// bypass ignore list
 	for _, ignore := range builds.Config.Proxy.IgnoreList {
-		if err := currentIpt.Append("mangle", "XT", "-o", ignore, "-j", "RETURN"); err != nil {
+		if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchOutInterface(false, ignore).TargetReturn().Append(); err != nil {
 			return e.New("apply ignore interface "+ignore+" on "+currentProto+" mangle chain XT failed, ", err).WithPrefix(tagTun)
 		}
 	}
 	// bypass intraNet list
 	if currentProto == "ipv4" {
 		for _, intraIp := range common.IntraNet {
-			if err := currentIpt.Append("mangle", "XT", "-d", intraIp, "-j", "RETURN"); err != nil {
+			if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchDestination(false, intraIp).TargetReturn().Append(); err != nil {
 				return e.New("bypass intraNet "+intraIp+" on "+currentProto+" mangle chain XT failed, ", err).WithPrefix(tagTun)
 			}
 		}
 	} else {
 		for _, intraIp6 := range common.IntraNet6 {
-			if err := currentIpt.Append("mangle", "XT", "-d", intraIp6, "-j", "RETURN"); err != nil {
+			if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchDestination(false, intraIp6).TargetReturn().Append(); err != nil {
 				return e.New("bypass intraNet "+intraIp6+" on "+currentProto+" mangle chain XT failed, ", err).WithPrefix(tagTun)
 			}
 		}
 	}
 	// bypass Core itself
-	if err := currentIpt.Append("mangle", "XT", "-m", "owner", "--gid-owner", common.CoreGid, "-j", "RETURN"); err != nil {
+	coreGid, _ := strconv.Atoi(common.CoreGid)
+	if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchOwner(iptables.WithMatchOwnerGid(false, coreGid)).TargetReturn().Append(); err != nil {
 		return e.New("bypass core gid on "+currentProto+" mangle chain XT failed, ", err).WithPrefix(tagTun)
 	}
 	// start processing proxy rules
 	// if PkgList has no package, should proxy everything
 	if len(builds.Config.Proxy.PkgList) == 0 {
-		if err := currentIpt.Append("mangle", "XT", "-p", "tcp", "-j", "MARK", "--set-xmark", common.TunMarkId); err != nil {
+		if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchProtocol(false, network.ProtocolTCP).TargetMark(iptables.WithTargetMarkSetX(0x4000000, 0x4000000)).Append(); err != nil {
 			return e.New("create local applications proxy on "+currentProto+" tcp mangle chain XT failed, ", err).WithPrefix(tagTun)
 		}
-		if err := currentIpt.Append("mangle", "XT", "-p", "udp", "-j", "MARK", "--set-xmark", common.TunMarkId); err != nil {
+		if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchProtocol(false, network.ProtocolUDP).TargetMark(iptables.WithTargetMarkSetX(0x4000000, 0x4000000)).Append(); err != nil {
 			return e.New("create local applications proxy on "+currentProto+" udp mangle chain XT failed, ", err).WithPrefix(tagTun)
 		}
 	} else if builds.Config.Proxy.Mode == "blacklist" {
@@ -304,16 +309,17 @@ func createProxyChain(ipv6 bool) error {
 		for _, pkg := range builds.Config.Proxy.PkgList {
 			uidSlice := tools.GetUid(pkg)
 			for _, uid := range uidSlice {
-				if err := currentIpt.Insert("mangle", "XT", 1, "-m", "owner", "--uid-owner", uid, "-j", "RETURN"); err != nil {
+				uidInt, _ := strconv.Atoi(uid)
+				if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchOwner(iptables.WithMatchOwnerUid(false, uidInt)).TargetReturn().Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
 					return e.New("bypass package "+pkg+" on "+currentProto+" mangle chain XT failed, ", err).WithPrefix(tagTun)
 				}
 			}
 		}
 		// allow others
-		if err := currentIpt.Append("mangle", "XT", "-p", "tcp", "-j", "MARK", "--set-xmark", common.TunMarkId); err != nil {
+		if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchProtocol(false, network.ProtocolTCP).TargetMark(iptables.WithTargetMarkSetX(0x4000000, 0x4000000)).Append(); err != nil {
 			return e.New("create local applications proxy on "+currentProto+" tcp mangle chain XT failed, ", err).WithPrefix(tagTun)
 		}
-		if err := currentIpt.Append("mangle", "XT", "-p", "udp", "-j", "MARK", "--set-xmark", common.TunMarkId); err != nil {
+		if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchProtocol(false, network.ProtocolUDP).TargetMark(iptables.WithTargetMarkSetX(0x4000000, 0x4000000)).Append(); err != nil {
 			return e.New("create local applications proxy on "+currentProto+" udp mangle chain XT failed, ", err).WithPrefix(tagTun)
 		}
 	} else if builds.Config.Proxy.Mode == "whitelist" {
@@ -321,26 +327,27 @@ func createProxyChain(ipv6 bool) error {
 		for _, pkg := range builds.Config.Proxy.PkgList {
 			uidSlice := tools.GetUid(pkg)
 			for _, uid := range uidSlice {
-				if err := currentIpt.Append("mangle", "XT", "-p", "tcp", "-m", "owner", "--uid-owner", uid, "-j", "MARK", "--set-xmark", common.TunMarkId); err != nil {
+				uidInt, _ := strconv.Atoi(uid)
+				if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchProtocol(false, network.ProtocolTCP).MatchOwner(iptables.WithMatchOwnerUid(false, uidInt)).TargetMark(iptables.WithTargetMarkSetX(0x4000000, 0x4000000)).Append(); err != nil {
 					return e.New("create package "+pkg+" proxy on "+currentProto+" tcp mangle chain XT failed, ", err).WithPrefix(tagTun)
 				}
-				if err := currentIpt.Append("mangle", "XT", "-p", "udp", "-m", "owner", "--uid-owner", uid, "-j", "MARK", "--set-xmark", common.TunMarkId); err != nil {
+				if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchProtocol(false, network.ProtocolUDP).MatchOwner(iptables.WithMatchOwnerUid(false, uidInt)).TargetMark(iptables.WithTargetMarkSetX(0x4000000, 0x4000000)).Append(); err != nil {
 					return e.New("create package "+pkg+" proxy on "+currentProto+" udp mangle chain XT failed, ", err).WithPrefix(tagTun)
 				}
 			}
 		}
 		// allow root user(eg: magisk, ksud, netd...)
-		if err := currentIpt.Append("mangle", "XT", "-p", "tcp", "-m", "owner", "--uid-owner", "0", "-j", "MARK", "--set-xmark", common.TunMarkId); err != nil {
+		if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchProtocol(false, network.ProtocolTCP).MatchOwner(iptables.WithMatchOwnerUid(false, 0)).TargetMark(iptables.WithTargetMarkSetX(0x4000000, 0x4000000)).Append(); err != nil {
 			return e.New("create root user proxy on "+currentProto+" tcp mangle chain XT failed, ", err).WithPrefix(tagTun)
 		}
-		if err := currentIpt.Append("mangle", "XT", "-p", "udp", "-m", "owner", "--uid-owner", "0", "-j", "MARK", "--set-xmark", common.TunMarkId); err != nil {
+		if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchProtocol(false, network.ProtocolUDP).MatchOwner(iptables.WithMatchOwnerUid(false, 0)).TargetMark(iptables.WithTargetMarkSetX(0x4000000, 0x4000000)).Append(); err != nil {
 			return e.New("create root user proxy on "+currentProto+" udp mangle chain XT failed, ", err).WithPrefix(tagTun)
 		}
 		// allow dns_tether user(eg: dnsmasq...)
-		if err := currentIpt.Append("mangle", "XT", "-p", "tcp", "-m", "owner", "--uid-owner", "1052", "-j", "MARK", "--set-xmark", common.TunMarkId); err != nil {
+		if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchProtocol(false, network.ProtocolTCP).MatchOwner(iptables.WithMatchOwnerUid(false, 1052)).TargetMark(iptables.WithTargetMarkSetX(0x4000000, 0x4000000)).Append(); err != nil {
 			return e.New("create dns_tether user proxy on "+currentProto+" tcp mangle chain XT failed, ", err).WithPrefix(tagTun)
 		}
-		if err := currentIpt.Append("mangle", "XT", "-p", "udp", "-m", "owner", "--uid-owner", "1052", "-j", "MARK", "--set-xmark", common.TunMarkId); err != nil {
+		if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchProtocol(false, network.ProtocolUDP).MatchOwner(iptables.WithMatchOwnerUid(false, 1052)).TargetMark(iptables.WithTargetMarkSetX(0x4000000, 0x4000000)).Append(); err != nil {
 			return e.New("create dns_tether user proxy on "+currentProto+" udp mangle chain XT failed, ", err).WithPrefix(tagTun)
 		}
 	} else {
@@ -349,26 +356,27 @@ func createProxyChain(ipv6 bool) error {
 	// allow IntraList
 	for _, intra := range builds.Config.Proxy.IntraList {
 		if (currentProto == "ipv4" && !common.IsIPv6(intra)) || (currentProto == "ipv6" && common.IsIPv6(intra)) {
-			if err := currentIpt.Insert("mangle", "XT", 1, "-p", "tcp", "-d", intra, "-j", "MARK", "--set-xmark", common.TunMarkId); err != nil {
+			if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchProtocol(false, network.ProtocolTCP).MatchDestination(false, intra).TargetMark(iptables.WithTargetMarkSetX(0x4000000, 0x4000000)).Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
 				return e.New("allow intra "+intra+" on "+currentProto+" tcp mangle chain XT failed, ", err).WithPrefix(tagTun)
 			}
-			if err := currentIpt.Insert("mangle", "XT", 1, "-p", "udp", "-d", intra, "-j", "MARK", "--set-xmark", common.TunMarkId); err != nil {
+			if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchProtocol(false, network.ProtocolUDP).MatchDestination(false, intra).TargetMark(iptables.WithTargetMarkSetX(0x4000000, 0x4000000)).Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
 				return e.New("allow intra "+intra+" on "+currentProto+" udp mangle chain XT failed, ", err).WithPrefix(tagTun)
 			}
 		}
 	}
 	// mark all dns request(except mihomo/hysteria2)
 	if builds.Config.XrayHelper.CoreType != "mihomo" && builds.Config.XrayHelper.CoreType != "hysteria2" {
-		if err := currentIpt.Insert("mangle", "XT", 1, "-p", "udp", "-m", "owner", "!", "--gid-owner", common.CoreGid, "--dport", "53", "-j", "MARK", "--set-xmark", common.TunMarkId); err != nil {
+		coreGid, _ := strconv.Atoi(common.CoreGid)
+		if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchProtocol(false, network.ProtocolUDP).MatchOwner(iptables.WithMatchOwnerGid(true, coreGid)).MatchUDP(iptables.WithMatchUDPDstPort(false, 53)).TargetMark(iptables.WithTargetMarkSetX(0x4000000, 0x4000000)).Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
 			return e.New("mark all dns request on "+currentProto+" udp mangle chain XT failed, ", err).WithPrefix(tagTun)
 		}
 	} else {
-		if err := currentIpt.Insert("mangle", "XT", 1, "-p", "udp", "--dport", "53", "-j", "RETURN"); err != nil {
+		if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchProtocol(false, network.ProtocolUDP).MatchUDP(iptables.WithMatchUDPDstPort(false, 53)).TargetReturn().Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
 			return e.New("bypass all dns request on "+currentProto+" udp mangle chain XT failed, ", err).WithPrefix(tagTun)
 		}
 	}
 	// apply rules to OUTPUT
-	if err := currentIpt.Insert("mangle", "OUTPUT", 1, "-j", "XT"); err != nil {
+	if err := currentIpt.Table(iptables.TableTypeMangle).Chain(iptables.ChainTypeOUTPUT).TargetJumpChain("XT").Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
 		return e.New("apply mangle chain XT to OUTPUT failed, ", err).WithPrefix(tagTun)
 	}
 	return nil
@@ -386,19 +394,21 @@ func createMangleChain(ipv6 bool) error {
 	if currentIpt == nil {
 		return e.New("get iptables failed").WithPrefix(tagTun)
 	}
-	if err := currentIpt.NewChain("mangle", "TUN2SOCKS"); err != nil {
+	chainTUN2SOCKS := iptables.ChainTypeUserDefined
+	chainTUN2SOCKS.SetName("TUN2SOCKS")
+	if err := currentIpt.Table(iptables.TableTypeMangle).NewChain("TUN2SOCKS"); err != nil {
 		return e.New("create "+currentProto+" mangle chain TUN2SOCKS failed, ", err).WithPrefix(tagTun)
 	}
 	// bypass intraNet list
 	if currentProto == "ipv4" {
 		for _, intraIp := range common.IntraNet {
-			if err := currentIpt.Append("mangle", "TUN2SOCKS", "-d", intraIp, "-j", "RETURN"); err != nil {
+			if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chainTUN2SOCKS).MatchDestination(false, intraIp).TargetReturn().Append(); err != nil {
 				return e.New("bypass intraNet "+intraIp+" on "+currentProto+" mangle chain TUN2SOCKS failed, ", err).WithPrefix(tagTun)
 			}
 		}
 	} else {
 		for _, intraIp6 := range common.IntraNet6 {
-			if err := currentIpt.Append("mangle", "TUN2SOCKS", "-d", intraIp6, "-j", "RETURN"); err != nil {
+			if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chainTUN2SOCKS).MatchDestination(false, intraIp6).TargetReturn().Append(); err != nil {
 				return e.New("bypass intraNet "+intraIp6+" on "+currentProto+" mangle chain TUN2SOCKS failed, ", err).WithPrefix(tagTun)
 			}
 		}
@@ -406,10 +416,10 @@ func createMangleChain(ipv6 bool) error {
 	// allow IntraList
 	for _, intra := range builds.Config.Proxy.IntraList {
 		if (currentProto == "ipv4" && !common.IsIPv6(intra)) || (currentProto == "ipv6" && common.IsIPv6(intra)) {
-			if err := currentIpt.Insert("mangle", "TUN2SOCKS", 1, "-p", "tcp", "-d", intra, "-j", "MARK", "--set-xmark", common.TunMarkId); err != nil {
+			if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chainTUN2SOCKS).MatchProtocol(false, network.ProtocolTCP).MatchDestination(false, intra).TargetMark(iptables.WithTargetMarkSetX(0x4000000, 0x4000000)).Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
 				return e.New("allow intra "+intra+" on "+currentProto+" tcp mangle chain TUN2SOCKS failed, ", err).WithPrefix(tagTun)
 			}
-			if err := currentIpt.Insert("mangle", "TUN2SOCKS", 1, "-p", "udp", "-d", intra, "-j", "MARK", "--set-xmark", common.TunMarkId); err != nil {
+			if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chainTUN2SOCKS).MatchProtocol(false, network.ProtocolUDP).MatchDestination(false, intra).TargetMark(iptables.WithTargetMarkSetX(0x4000000, 0x4000000)).Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
 				return e.New("allow intra "+intra+" on "+currentProto+" udp mangle chain TUN2SOCKS failed, ", err).WithPrefix(tagTun)
 			}
 		}
@@ -419,39 +429,38 @@ func createMangleChain(ipv6 bool) error {
 		// allow ApList to IntraList
 		for _, intra := range builds.Config.Proxy.IntraList {
 			if (currentProto == "ipv4" && !common.IsIPv6(intra)) || (currentProto == "ipv6" && common.IsIPv6(intra)) {
-				if err := currentIpt.Insert("mangle", "TUN2SOCKS", 1, "-p", "tcp", "-i", ap, "-d", intra, "-j", "MARK", "--set-xmark", common.TunMarkId); err != nil {
+				if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chainTUN2SOCKS).MatchProtocol(false, network.ProtocolTCP).MatchInInterface(false, ap).MatchDestination(false, intra).TargetMark(iptables.WithTargetMarkSetX(0x4000000, 0x4000000)).Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
 					return e.New("allow intra "+intra+" on "+currentProto+" tcp mangle chain TUN2SOCKS failed, ", err).WithPrefix(tagTun)
 				}
-				if err := currentIpt.Insert("mangle", "TUN2SOCKS", 1, "-p", "udp", "-i", ap, "-d", intra, "-j", "MARK", "--set-xmark", common.TunMarkId); err != nil {
+				if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chainTUN2SOCKS).MatchProtocol(false, network.ProtocolUDP).MatchInInterface(false, ap).MatchDestination(false, intra).TargetMark(iptables.WithTargetMarkSetX(0x4000000, 0x4000000)).Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
 					return e.New("allow intra "+intra+" on "+currentProto+" udp mangle chain TUN2SOCKS failed, ", err).WithPrefix(tagTun)
 				}
 			}
 		}
-		if err := currentIpt.Append("mangle", "TUN2SOCKS", "-p", "tcp", "-i", ap, "-j", "MARK", "--set-xmark", common.TunMarkId); err != nil {
+		if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chainTUN2SOCKS).MatchProtocol(false, network.ProtocolTCP).MatchInInterface(false, ap).TargetMark(iptables.WithTargetMarkSetX(0x4000000, 0x4000000)).Append(); err != nil {
 			return e.New("create ap interface "+ap+" proxy on "+currentProto+" tcp mangle chain TUN2SOCKS failed, ", err).WithPrefix(tagTun)
 		}
-		if err := currentIpt.Append("mangle", "TUN2SOCKS", "-p", "udp", "-i", ap, "-j", "MARK", "--set-xmark", common.TunMarkId); err != nil {
+		if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chainTUN2SOCKS).MatchProtocol(false, network.ProtocolUDP).MatchInInterface(false, ap).TargetMark(iptables.WithTargetMarkSetX(0x4000000, 0x4000000)).Append(); err != nil {
 			return e.New("create ap interface "+ap+" proxy on "+currentProto+" udp mangle chain TUN2SOCKS failed, ", err).WithPrefix(tagTun)
 		}
 	}
 	// mark all dns request(except mihomo/hysteria2)
 	if builds.Config.XrayHelper.CoreType != "mihomo" && builds.Config.XrayHelper.CoreType != "hysteria2" {
-		if err := currentIpt.Insert("mangle", "TUN2SOCKS", 1, "-p", "udp", "--dport", "53", "-j", "MARK", "--set-xmark", common.TunMarkId); err != nil {
+		if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chainTUN2SOCKS).MatchProtocol(false, network.ProtocolUDP).MatchUDP(iptables.WithMatchUDPDstPort(false, 53)).TargetMark(iptables.WithTargetMarkSetX(0x4000000, 0x4000000)).Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
 			return e.New("mark all dns request on "+currentProto+" udp mangle chain TUN2SOCKS failed, ", err).WithPrefix(tagTun)
 		}
 	} else {
-		if err := currentIpt.Insert("mangle", "TUN2SOCKS", 1, "-p", "udp", "--dport", "53", "-j", "RETURN"); err != nil {
+		if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chainTUN2SOCKS).MatchProtocol(false, network.ProtocolUDP).MatchUDP(iptables.WithMatchUDPDstPort(false, 53)).TargetReturn().Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
 			return e.New("bypass all dns request on "+currentProto+" udp mangle chain TUN2SOCKS failed, ", err).WithPrefix(tagTun)
 		}
 	}
 	// apply rules to PREROUTING
-	if err := currentIpt.Insert("mangle", "PREROUTING", 1, "-j", "TUN2SOCKS"); err != nil {
+	if err := currentIpt.Table(iptables.TableTypeMangle).Chain(iptables.ChainTypePREROUTING).TargetJumpChain("TUN2SOCKS").Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
 		return e.New("apply mangle chain TUN2SOCKS to PREROUTING failed, ", err).WithPrefix(tagTun)
 	}
 	return nil
 }
 
-// cleanIptablesChain Clean all changed iptables rules by XrayHelper
 func cleanIptablesChain(ipv6 bool) {
 	currentIpt := common.Ipt
 	if ipv6 {
@@ -460,8 +469,14 @@ func cleanIptablesChain(ipv6 bool) {
 	if currentIpt == nil {
 		return
 	}
-	_ = currentIpt.Delete("mangle", "OUTPUT", "-j", "XT")
-	_ = currentIpt.Delete("mangle", "PREROUTING", "-j", "TUN2SOCKS")
-	_ = currentIpt.ClearAndDeleteChain("mangle", "XT")
-	_ = currentIpt.ClearAndDeleteChain("mangle", "TUN2SOCKS")
+	_ = currentIpt.Table(iptables.TableTypeMangle).Chain(iptables.ChainTypeOUTPUT).TargetJumpChain("XT").Delete()
+	_ = currentIpt.Table(iptables.TableTypeMangle).Chain(iptables.ChainTypePREROUTING).TargetJumpChain("TUN2SOCKS").Delete()
+	chainXT := iptables.ChainTypeUserDefined
+	chainXT.SetName("XT")
+	_ = currentIpt.Table(iptables.TableTypeMangle).Chain(chainXT).Flush()
+	_ = currentIpt.Table(iptables.TableTypeMangle).Chain(chainXT).DeleteChain()
+	chainTUN2SOCKS := iptables.ChainTypeUserDefined
+	chainTUN2SOCKS.SetName("TUN2SOCKS")
+	_ = currentIpt.Table(iptables.TableTypeMangle).Chain(chainTUN2SOCKS).Flush()
+	_ = currentIpt.Table(iptables.TableTypeMangle).Chain(chainTUN2SOCKS).DeleteChain()
 }

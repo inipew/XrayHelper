@@ -8,6 +8,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/singchia/go-xtables/iptables"
+	"github.com/singchia/go-xtables/pkg/network"
 )
 
 const (
@@ -60,18 +63,20 @@ func GetUid(pkgInfo string) []string {
 }
 
 func DisableIPV6DNS() error {
-	if err := common.Ipt6.Insert("filter", "OUTPUT", 1, "-p", "udp", "--dport", "53", "-j", "REJECT"); err != nil {
+	if err := common.Ipt6.Table(iptables.TableTypeFilter).Chain(iptables.ChainTypeOUTPUT).MatchProtocol(false, network.ProtocolUDP).MatchUDP(iptables.WithMatchUDPDstPort(false, 53)).TargetReject(iptables.WithTargetRejectType(iptables.RejectType(7))).Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
 		return e.New("disable dns request on ipv6 failed, ", err).WithPrefix(tagTools)
 	}
 	return nil
 }
 
 func EnableIPV6DNS() {
-	_ = common.Ipt6.Delete("filter", "OUTPUT", "-p", "udp", "--dport", "53", "-j", "REJECT")
+	_ = common.Ipt6.Table(iptables.TableTypeFilter).Chain(iptables.ChainTypeOUTPUT).MatchProtocol(false, network.ProtocolUDP).MatchUDP(iptables.WithMatchUDPDstPort(false, 53)).TargetReject(iptables.WithTargetRejectType(iptables.RejectType(7))).Delete()
 }
 
 func RedirectDNS(port string) error {
-	if err := common.Ipt.Insert("nat", "OUTPUT", 1, "-p", "udp", "-m", "owner", "!", "--gid-owner", common.CoreGid, "--dport", "53", "-j", "DNAT", "--to-destination", "127.0.0.1:"+port); err != nil {
+	portInt, _ := strconv.Atoi(port)
+	coreGid, _ := strconv.Atoi(common.CoreGid)
+	if err := common.Ipt.Table(iptables.TableTypeNat).Chain(iptables.ChainTypeOUTPUT).MatchProtocol(false, network.ProtocolUDP).MatchOwner(iptables.WithMatchOwnerGid(true, coreGid)).MatchUDP(iptables.WithMatchUDPDstPort(false, 53)).TargetDNAT(iptables.WithTargetDNATToAddr(network.ParseIP("127.0.0.1"), portInt)).Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
 		return e.New("redirect dns request failed, ", err).WithPrefix(tagTools)
 	}
 	if err := DisableIPV6DNS(); err != nil {
@@ -81,29 +86,31 @@ func RedirectDNS(port string) error {
 }
 
 func CleanRedirectDNS(port string) {
-	_ = common.Ipt.Delete("nat", "OUTPUT", "-p", "udp", "-m", "owner", "!", "--gid-owner", common.CoreGid, "--dport", "53", "-j", "DNAT", "--to-destination", "127.0.0.1:"+port)
+	portInt, _ := strconv.Atoi(port)
+	coreGid, _ := strconv.Atoi(common.CoreGid)
+	_ = common.Ipt.Table(iptables.TableTypeNat).Chain(iptables.ChainTypeOUTPUT).MatchProtocol(false, network.ProtocolUDP).MatchOwner(iptables.WithMatchOwnerGid(true, coreGid)).MatchUDP(iptables.WithMatchUDPDstPort(false, 53)).TargetDNAT(iptables.WithTargetDNATToAddr(network.ParseIP("127.0.0.1"), portInt)).Delete()
 	EnableIPV6DNS()
 }
 
 func EnableForward(device string) error {
-	if err := common.Ipt.Insert("filter", "FORWARD", 1, "-i", device, "-j", "ACCEPT"); err != nil {
+	if err := common.Ipt.Table(iptables.TableTypeFilter).Chain(iptables.ChainTypeFORWARD).MatchInInterface(false, device).TargetAccept().Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
 		return e.New("enable ipv4 forward for "+device+" incoming failed, ", err).WithPrefix(tagTools)
 	}
-	if err := common.Ipt.Insert("filter", "FORWARD", 1, "-o", device, "-j", "ACCEPT"); err != nil {
+	if err := common.Ipt.Table(iptables.TableTypeFilter).Chain(iptables.ChainTypeFORWARD).MatchOutInterface(false, device).TargetAccept().Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
 		return e.New("enable ipv4 forward for "+device+" outgoing failed, ", err).WithPrefix(tagTools)
 	}
-	if err := common.Ipt6.Insert("filter", "FORWARD", 1, "-i", device, "-j", "ACCEPT"); err != nil {
+	if err := common.Ipt6.Table(iptables.TableTypeFilter).Chain(iptables.ChainTypeFORWARD).MatchInInterface(false, device).TargetAccept().Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
 		return e.New("enable ipv6 forward for "+device+" incoming failed, ", err).WithPrefix(tagTools)
 	}
-	if err := common.Ipt6.Insert("filter", "FORWARD", 1, "-o", device, "-j", "ACCEPT"); err != nil {
+	if err := common.Ipt6.Table(iptables.TableTypeFilter).Chain(iptables.ChainTypeFORWARD).MatchOutInterface(false, device).TargetAccept().Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
 		return e.New("enable ipv6 forward for "+device+" outgoing failed, ", err).WithPrefix(tagTools)
 	}
 	return nil
 }
 
 func DisableForward(device string) {
-	_ = common.Ipt.Delete("filter", "FORWARD", "-i", device, "-j", "ACCEPT")
-	_ = common.Ipt.Delete("filter", "FORWARD", "-o", device, "-j", "ACCEPT")
-	_ = common.Ipt6.Delete("filter", "FORWARD", "-i", device, "-j", "ACCEPT")
-	_ = common.Ipt6.Delete("filter", "FORWARD", "-o", device, "-j", "ACCEPT")
+	_ = common.Ipt.Table(iptables.TableTypeFilter).Chain(iptables.ChainTypeFORWARD).MatchInInterface(false, device).TargetAccept().Delete()
+	_ = common.Ipt.Table(iptables.TableTypeFilter).Chain(iptables.ChainTypeFORWARD).MatchOutInterface(false, device).TargetAccept().Delete()
+	_ = common.Ipt6.Table(iptables.TableTypeFilter).Chain(iptables.ChainTypeFORWARD).MatchInInterface(false, device).TargetAccept().Delete()
+	_ = common.Ipt6.Table(iptables.TableTypeFilter).Chain(iptables.ChainTypeFORWARD).MatchOutInterface(false, device).TargetAccept().Delete()
 }

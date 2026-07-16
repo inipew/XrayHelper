@@ -6,6 +6,11 @@ import (
 	e "XrayHelper/main/errors"
 	"XrayHelper/main/log"
 	"bytes"
+	"net"
+	"strconv"
+
+	"github.com/singchia/go-xtables/iptables"
+	"github.com/singchia/go-xtables/pkg/network"
 )
 
 const tagDummy = "dummy"
@@ -70,42 +75,53 @@ func deleteDummyRoute() {
 }
 
 func createDummyOutputChain() error {
-	if err := common.Ipt6.NewChain("mangle", "DUMMY"); err != nil {
+	chain := iptables.ChainTypeUserDefined
+	chain.SetName("DUMMY")
+	if err := common.Ipt6.Table(iptables.TableTypeMangle).NewChain("DUMMY"); err != nil {
 		return e.New("create ipv6 mangle chain DUMMY failed, ", err).WithPrefix(tagDummy)
 	}
-	if err := common.Ipt6.Append("mangle", "DUMMY", "-p", "tcp", "-j", "MARK", "--set-xmark", common.DummyMarkId); err != nil {
-		return e.New("set mark on tcp mangle chain DUMMY failed, ", err).WithPrefix(tagDummy)
+	if err := common.Ipt6.Table(iptables.TableTypeMangle).Chain(iptables.ChainTypePREROUTING).MatchInInterface(false, common.DummyDevice).TargetMark(iptables.WithTargetMarkSetX(0x2000000, 0x2000000)).Append(); err != nil {
+		return e.New("create dummy prerouting mark on ipv6 mangle chain failed, ", err).WithPrefix(tagTproxy)
 	}
-	if err := common.Ipt6.Append("mangle", "DUMMY", "-p", "udp", "-j", "MARK", "--set-xmark", common.DummyMarkId); err != nil {
+	if err := common.Ipt6.Table(iptables.TableTypeMangle).Chain(chain).MatchProtocol(false, network.ProtocolTCP).TargetMark(iptables.WithTargetMarkSetX(0x2000000, 0x2000000)).Append(); err != nil {
 		return e.New("set mark on udp mangle chain DUMMY failed, ", err).WithPrefix(tagDummy)
 	}
-	if err := common.Ipt6.Append("mangle", "OUTPUT", "-j", "DUMMY"); err != nil {
+	if err := common.Ipt6.Table(iptables.TableTypeMangle).Chain(iptables.ChainTypeOUTPUT).TargetJumpChain("DUMMY").Append(); err != nil {
 		return e.New("apply ipv6 mangle chain DUMMY on OUTPUT failed, ", err).WithPrefix(tagDummy)
 	}
 	return nil
 }
 
 func createDummyPreroutingChain() error {
-	if err := common.Ipt6.NewChain("mangle", "XD"); err != nil {
+	chain := iptables.ChainTypeUserDefined
+	chain.SetName("XD")
+	if err := common.Ipt6.Table(iptables.TableTypeMangle).NewChain("XD"); err != nil {
 		return e.New("create ipv6 mangle chain XD failed, ", err).WithPrefix(tagDummy)
 	}
-	if err := common.Ipt6.Append("mangle", "XD", "-i", common.DummyDevice, "-p", "tcp", "-j", "TPROXY", "--on-ip", "::", "--on-port", builds.Config.Proxy.TproxyPort, "--tproxy-mark", common.DummyMarkId); err != nil {
-		return e.New("set mark on tcp mangle chain XD failed, ", err).WithPrefix(tagDummy)
+	tproxyPort, _ := strconv.Atoi(builds.Config.Proxy.TproxyPort)
+	if err := common.Ipt6.Table(iptables.TableTypeMangle).Chain(chain).MatchInInterface(false, common.DummyDevice).MatchProtocol(false, network.ProtocolTCP).TargetTProxy(iptables.WithTargetTProxyOnPort(tproxyPort), iptables.WithTargetTProxyOnIP(net.ParseIP("::")), iptables.WithTargetTProxyMark(0x2000000, 0x2000000)).Append(); err != nil {
+		return e.New("create dummy tproxy on ipv6 mangle chain failed, ", err).WithPrefix(tagTproxy)
 	}
-	if err := common.Ipt6.Append("mangle", "XD", "-i", common.DummyDevice, "-p", "udp", "-j", "TPROXY", "--on-ip", "::", "--on-port", builds.Config.Proxy.TproxyPort, "--tproxy-mark", common.DummyMarkId); err != nil {
+	if err := common.Ipt6.Table(iptables.TableTypeMangle).Chain(chain).MatchInInterface(false, common.DummyDevice).MatchProtocol(false, network.ProtocolUDP).TargetTProxy(iptables.WithTargetTProxyOnPort(tproxyPort), iptables.WithTargetTProxyOnIP(net.ParseIP("::")), iptables.WithTargetTProxyMark(0x2000000, 0x2000000)).Append(); err != nil {
 		return e.New("set mark on udp mangle chain XD failed, ", err).WithPrefix(tagDummy)
 	}
-	if err := common.Ipt6.Append("mangle", "PREROUTING", "-j", "XD"); err != nil {
+	if err := common.Ipt6.Table(iptables.TableTypeMangle).Chain(iptables.ChainTypePREROUTING).TargetJumpChain("XD").Append(); err != nil {
 		return e.New("apply ipv6 mangle chain XD on PREROUTING failed, ", err).WithPrefix(tagDummy)
 	}
 	return nil
 }
 
 func cleanDummyChain() {
-	_ = common.Ipt6.Delete("mangle", "OUTPUT", "-j", "DUMMY")
-	_ = common.Ipt6.Delete("mangle", "PREROUTING", "-j", "XD")
-	_ = common.Ipt6.ClearAndDeleteChain("mangle", "DUMMY")
-	_ = common.Ipt6.ClearAndDeleteChain("mangle", "XD")
+	chainDUMMY := iptables.ChainTypeUserDefined
+	chainDUMMY.SetName("DUMMY")
+	_ = common.Ipt6.Table(iptables.TableTypeMangle).Chain(iptables.ChainTypeOUTPUT).TargetJumpChain("DUMMY").Delete()
+	_ = common.Ipt6.Table(iptables.TableTypeMangle).Chain(iptables.ChainTypePREROUTING).TargetJumpChain("XD").Delete()
+	chainXD := iptables.ChainTypeUserDefined
+	chainXD.SetName("XD")
+	_ = common.Ipt6.Table(iptables.TableTypeMangle).Chain(chainDUMMY).Flush()
+	_ = common.Ipt6.Table(iptables.TableTypeMangle).Chain(chainDUMMY).DeleteChain()
+	_ = common.Ipt6.Table(iptables.TableTypeMangle).Chain(chainXD).Flush()
+	_ = common.Ipt6.Table(iptables.TableTypeMangle).Chain(chainXD).DeleteChain()
 }
 
 func enableDummy() error {
