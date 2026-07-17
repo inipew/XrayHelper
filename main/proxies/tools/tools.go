@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"XrayHelper/main/builds"
 	"XrayHelper/main/common"
 	e "XrayHelper/main/errors"
 	"XrayHelper/main/log"
@@ -76,9 +77,31 @@ func EnableIPV6DNS() {
 func RedirectDNS(port string) error {
 	portInt, _ := strconv.Atoi(port)
 	coreGid, _ := strconv.Atoi(common.CoreGid)
-	if err := common.Ipt.Table(iptables.TableTypeNat).Chain(iptables.ChainTypeOUTPUT).MatchProtocol(false, network.ProtocolUDP).MatchOwner(iptables.WithMatchOwnerGid(true, coreGid)).MatchUDP(iptables.WithMatchUDPDstPort(false, 53)).TargetDNAT(iptables.WithTargetDNATToAddr(network.ParseIP("127.0.0.1"), portInt)).Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
-		return e.New("redirect dns request failed, ", err).WithPrefix(tagTools)
+	
+	chain := iptables.ChainTypeUserDefined
+	chain.SetName("NAT_DNS_HIJACK")
+	_ = common.Ipt.Table(iptables.TableTypeNat).NewChain("NAT_DNS_HIJACK")
+
+	// redirect UDP and TCP 53 to local port
+	if err := common.Ipt.Table(iptables.TableTypeNat).Chain(chain).MatchProtocol(false, network.ProtocolUDP).MatchUDP(iptables.WithMatchUDPDstPort(false, 53)).TargetRedirect(iptables.WithTargetRedirectToPort(portInt)).Append(); err != nil {
+		return e.New("redirect dns request udp failed, ", err).WithPrefix(tagTools)
 	}
+	if err := common.Ipt.Table(iptables.TableTypeNat).Chain(chain).MatchProtocol(false, network.ProtocolTCP).MatchTCP(iptables.WithMatchTCPDstPort(false, 53)).TargetRedirect(iptables.WithTargetRedirectToPort(portInt)).Append(); err != nil {
+		return e.New("redirect dns request tcp failed, ", err).WithPrefix(tagTools)
+	}
+
+	// hook to OUTPUT
+	if err := common.Ipt.Table(iptables.TableTypeNat).Chain(iptables.ChainTypeOUTPUT).MatchOwner(iptables.WithMatchOwnerGid(true, coreGid)).TargetJumpChain("NAT_DNS_HIJACK").Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
+		return e.New("jump NAT_DNS_HIJACK from OUTPUT failed, ", err).WithPrefix(tagTools)
+	}
+
+	// hook to PREROUTING for tethering interfaces
+	for _, ap := range builds.Config.Proxy.ApList {
+		if err := common.Ipt.Table(iptables.TableTypeNat).Chain(iptables.ChainTypePREROUTING).MatchInInterface(false, ap).TargetJumpChain("NAT_DNS_HIJACK").Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
+			return e.New("jump NAT_DNS_HIJACK from PREROUTING for "+ap+" failed, ", err).WithPrefix(tagTools)
+		}
+	}
+
 	if err := DisableIPV6DNS(); err != nil {
 		return err
 	}
@@ -86,9 +109,18 @@ func RedirectDNS(port string) error {
 }
 
 func CleanRedirectDNS(port string) {
-	portInt, _ := strconv.Atoi(port)
 	coreGid, _ := strconv.Atoi(common.CoreGid)
-	_ = common.Ipt.Table(iptables.TableTypeNat).Chain(iptables.ChainTypeOUTPUT).MatchProtocol(false, network.ProtocolUDP).MatchOwner(iptables.WithMatchOwnerGid(true, coreGid)).MatchUDP(iptables.WithMatchUDPDstPort(false, 53)).TargetDNAT(iptables.WithTargetDNATToAddr(network.ParseIP("127.0.0.1"), portInt)).Delete()
+	_ = common.Ipt.Table(iptables.TableTypeNat).Chain(iptables.ChainTypeOUTPUT).MatchOwner(iptables.WithMatchOwnerGid(true, coreGid)).TargetJumpChain("NAT_DNS_HIJACK").Delete()
+	
+	for _, ap := range builds.Config.Proxy.ApList {
+		_ = common.Ipt.Table(iptables.TableTypeNat).Chain(iptables.ChainTypePREROUTING).MatchInInterface(false, ap).TargetJumpChain("NAT_DNS_HIJACK").Delete()
+	}
+
+	chain := iptables.ChainTypeUserDefined
+	chain.SetName("NAT_DNS_HIJACK")
+	_ = common.Ipt.Table(iptables.TableTypeNat).Chain(chain).Flush()
+	_ = common.Ipt.Table(iptables.TableTypeNat).Chain(chain).DeleteChain()
+
 	EnableIPV6DNS()
 }
 

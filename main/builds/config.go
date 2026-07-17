@@ -48,6 +48,7 @@ var Config struct {
 		SocksPort       string   `default:"65534" yaml:"socksPort"`
 		TunDevice       string   `default:"xtun" yaml:"tunDevice"`
 		EnableIPv6      bool     `default:"false" yaml:"enableIPv6"`
+		BlockQuic       bool     `default:"true" yaml:"blockQuic"`
 		AutoDNSStrategy bool     `default:"true" yaml:"autoDNSStrategy"`
 		Mode            string   `default:"blacklist" yaml:"mode"`
 		PkgList         []string `yaml:"pkgList"`
