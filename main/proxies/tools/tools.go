@@ -63,14 +63,14 @@ func GetUid(pkgInfo string) []string {
 }
 
 func DisableIPV6DNS() error {
-	if err := common.Ipt6.Table(iptables.TableTypeFilter).Chain(iptables.ChainTypeOUTPUT).MatchProtocol(false, network.ProtocolUDP).MatchUDP(iptables.WithMatchUDPDstPort(false, 53)).TargetReject(iptables.WithTargetRejectType(iptables.RejectType(7))).Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
+	if err := common.Ipt6.Table(iptables.TableTypeFilter).Chain(iptables.ChainTypeOUTPUT).MatchProtocol(false, network.ProtocolUDP).MatchUDP(iptables.WithMatchUDPDstPort(false, 53)).TargetReject().Insert(iptables.WithCommandInsertRuleNumber(1)); err != nil {
 		return e.New("disable dns request on ipv6 failed, ", err).WithPrefix(tagTools)
 	}
 	return nil
 }
 
 func EnableIPV6DNS() {
-	_ = common.Ipt6.Table(iptables.TableTypeFilter).Chain(iptables.ChainTypeOUTPUT).MatchProtocol(false, network.ProtocolUDP).MatchUDP(iptables.WithMatchUDPDstPort(false, 53)).TargetReject(iptables.WithTargetRejectType(iptables.RejectType(7))).Delete()
+	_ = common.Ipt6.Table(iptables.TableTypeFilter).Chain(iptables.ChainTypeOUTPUT).MatchProtocol(false, network.ProtocolUDP).MatchUDP(iptables.WithMatchUDPDstPort(false, 53)).TargetReject().Delete()
 }
 
 func RedirectDNS(port string) error {
