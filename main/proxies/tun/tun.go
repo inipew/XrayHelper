@@ -36,6 +36,7 @@ func (this *Tun) Enable() error {
 			this.Disable()
 			return err
 		}
+		if err := blockQuic(false); err != nil { return err }
 		if err := createProxyChain(false); err != nil {
 			this.Disable()
 			return err
@@ -49,7 +50,8 @@ func (this *Tun) Enable() error {
 				this.Disable()
 				return err
 			}
-			if err := createProxyChain(true); err != nil {
+			if err := blockQuic(true); err != nil { return err }
+				if err := createProxyChain(true); err != nil {
 				this.Disable()
 				return err
 			}
@@ -94,9 +96,11 @@ func (this *Tun) Disable() {
 	if builds.Config.Proxy.Method == "tun2socks" {
 		deleteRoute(false)
 		cleanIptablesChain(false)
+		unblockQuic(false)
 		//always clean ipv6 rules
 		deleteRoute(true)
 		cleanIptablesChain(true)
+			unblockQuic(true)
 		stopTun2socks()
 		//always clean dns rules
 		tools.EnableIPV6DNS()
@@ -479,4 +483,148 @@ func cleanIptablesChain(ipv6 bool) {
 	chainTUN2SOCKS.SetName("TUN2SOCKS")
 	_ = currentIpt.Table(iptables.TableTypeMangle).Chain(chainTUN2SOCKS).Flush()
 	_ = currentIpt.Table(iptables.TableTypeMangle).Chain(chainTUN2SOCKS).DeleteChain()
+}
+
+
+func setupBypassIpTunChain(ipv6 bool) error {
+	currentIpt := common.Ipt
+	currentProto := "ipv4"
+	if ipv6 {
+		currentIpt = common.Ipt6
+		currentProto = "ipv6"
+	}
+
+	chain := iptables.ChainTypeUserDefined
+	chain.SetName("BYPASS_IP_TUN")
+	_ = currentIpt.Table(iptables.TableTypeMangle).NewChain("BYPASS_IP_TUN")
+
+	if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchAddrType(iptables.WithMatchAddrTypeDstType(false, iptables.LOCAL)).MatchProtocol(true, network.ProtocolUDP).TargetAccept().Append(); err != nil {
+		return err
+	}
+	if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchAddrType(iptables.WithMatchAddrTypeDstType(false, iptables.LOCAL)).MatchProtocol(false, network.ProtocolUDP).MatchUDP(iptables.WithMatchUDPDstPort(true, 53)).TargetAccept().Append(); err != nil {
+		return err
+	}
+
+	for _, ignore := range builds.Config.Proxy.IgnoreList {
+		if (currentProto == "ipv4" && !common.IsIPv6(ignore)) || (currentProto == "ipv6" && common.IsIPv6(ignore)) {
+			if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchProtocol(false, network.ProtocolTCP).MatchDestination(false, ignore).TargetAccept().Append(); err != nil {
+				return err
+			}
+			if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchProtocol(false, network.ProtocolUDP).MatchDestination(false, ignore).TargetAccept().Append(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func setupProxyIpTunChain(ipv6 bool) error {
+	currentIpt := common.Ipt
+	currentProto := "ipv4"
+	if ipv6 {
+		currentIpt = common.Ipt6
+		currentProto = "ipv6"
+	}
+	
+	tunMark, err := strconv.Atoi(common.TunMarkId)
+	if err != nil {
+		tunMark = 0x4000000
+	}
+
+	chainOut := iptables.ChainTypeUserDefined
+	chainOut.SetName("PROXY_IP_TUN_OUT")
+	_ = currentIpt.Table(iptables.TableTypeMangle).NewChain("PROXY_IP_TUN_OUT")
+
+	chainPre := iptables.ChainTypeUserDefined
+	chainPre.SetName("PROXY_IP_TUN_PRE")
+	_ = currentIpt.Table(iptables.TableTypeMangle).NewChain("PROXY_IP_TUN_PRE")
+
+	for _, intra := range builds.Config.Proxy.IntraList {
+		if (currentProto == "ipv4" && !common.IsIPv6(intra)) || (currentProto == "ipv6" && common.IsIPv6(intra)) {
+			if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chainOut).MatchProtocol(false, network.ProtocolTCP).MatchDestination(false, intra).TargetMark(iptables.WithTargetMarkSetX(tunMark, tunMark)).Append(); err != nil {
+				return err
+			}
+			if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chainOut).MatchProtocol(false, network.ProtocolUDP).MatchDestination(false, intra).TargetMark(iptables.WithTargetMarkSetX(tunMark, tunMark)).Append(); err != nil {
+				return err
+			}
+			if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chainPre).MatchProtocol(false, network.ProtocolTCP).MatchDestination(false, intra).TargetMark(iptables.WithTargetMarkSetX(tunMark, tunMark)).Append(); err != nil {
+				return err
+			}
+			if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chainPre).MatchProtocol(false, network.ProtocolUDP).MatchDestination(false, intra).TargetMark(iptables.WithTargetMarkSetX(tunMark, tunMark)).Append(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func setupProxyInterfaceTunChain(ipv6 bool) error {
+	currentIpt := common.Ipt
+	if ipv6 {
+		currentIpt = common.Ipt6
+	}
+	chain := iptables.ChainTypeUserDefined
+	chain.SetName("PROXY_INTERFACE_TUN")
+	_ = currentIpt.Table(iptables.TableTypeMangle).NewChain("PROXY_INTERFACE_TUN")
+
+	for _, ap := range builds.Config.Proxy.ApList {
+		if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchInInterface(false, ap).TargetReturn().Append(); err != nil {
+			return err
+		}
+	}
+	if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).TargetAccept().Append(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func setupMssClamping(ipv6 bool) error {
+	currentIpt := common.Ipt
+	if ipv6 {
+		currentIpt = common.Ipt6
+	}
+	chain := iptables.ChainTypeFORWARD
+	
+	// -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+	_ = currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchProtocol(false, network.ProtocolTCP).MatchTCP(iptables.WithMatchTCPSYN(false)).TargetTCPMSS(iptables.WithTargetTCPMSSClampMssToPmtu()).Insert(iptables.WithCommandInsertRuleNumber(1))
+	return nil
+}
+
+func blockQuic(ipv6 bool) error {
+	if !builds.Config.Proxy.BlockQuic {
+		return nil
+	}
+	currentIpt := common.Ipt
+	if ipv6 {
+		currentIpt = common.Ipt6
+	}
+	if currentIpt == nil {
+		return nil
+	}
+
+	chain := iptables.ChainTypeUserDefined
+	chain.SetName("BLOCK_QUIC")
+	_ = currentIpt.Table(iptables.TableTypeFilter).NewChain("BLOCK_QUIC")
+	_ = currentIpt.Table(iptables.TableTypeFilter).Chain(chain).MatchProtocol(false, network.ProtocolUDP).MatchUDP(iptables.WithMatchUDPDstPort(false, 443)).TargetReject().Append()
+	_ = currentIpt.Table(iptables.TableTypeFilter).Chain(iptables.ChainTypeINPUT).TargetJumpChain("BLOCK_QUIC").Insert(iptables.WithCommandInsertRuleNumber(1))
+	_ = currentIpt.Table(iptables.TableTypeFilter).Chain(iptables.ChainTypeFORWARD).TargetJumpChain("BLOCK_QUIC").Insert(iptables.WithCommandInsertRuleNumber(1))
+	_ = currentIpt.Table(iptables.TableTypeFilter).Chain(iptables.ChainTypeOUTPUT).TargetJumpChain("BLOCK_QUIC").Insert(iptables.WithCommandInsertRuleNumber(1))
+	return nil
+}
+
+func unblockQuic(ipv6 bool) {
+	currentIpt := common.Ipt
+	if ipv6 {
+		currentIpt = common.Ipt6
+	}
+	if currentIpt == nil {
+		return
+	}
+	_ = currentIpt.Table(iptables.TableTypeFilter).Chain(iptables.ChainTypeINPUT).TargetJumpChain("BLOCK_QUIC").Delete()
+	_ = currentIpt.Table(iptables.TableTypeFilter).Chain(iptables.ChainTypeFORWARD).TargetJumpChain("BLOCK_QUIC").Delete()
+	_ = currentIpt.Table(iptables.TableTypeFilter).Chain(iptables.ChainTypeOUTPUT).TargetJumpChain("BLOCK_QUIC").Delete()
+	chain := iptables.ChainTypeUserDefined
+	chain.SetName("BLOCK_QUIC")
+	_ = currentIpt.Table(iptables.TableTypeFilter).Chain(chain).Flush()
+	_ = currentIpt.Table(iptables.TableTypeFilter).Chain(chain).DeleteChain()
 }

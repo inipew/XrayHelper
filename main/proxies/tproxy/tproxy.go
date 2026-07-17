@@ -482,3 +482,94 @@ func cleanIptablesChain(ipv6 bool) {
 	_ = currentIpt.Table(iptables.TableTypeMangle).Chain(chainDivert).DeleteChain()
 
 }
+
+
+func setupBypassIpChain(ipv6 bool) error {
+	currentIpt := common.Ipt
+	currentProto := "ipv4"
+	if ipv6 {
+		currentIpt = common.Ipt6
+		currentProto = "ipv6"
+	}
+
+	chain := iptables.ChainTypeUserDefined
+	chain.SetName("BYPASS_IP")
+	_ = currentIpt.Table(iptables.TableTypeMangle).NewChain("BYPASS_IP")
+
+	if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchAddrType(iptables.WithMatchAddrTypeDstType(false, iptables.LOCAL)).MatchProtocol(true, network.ProtocolUDP).TargetAccept().Append(); err != nil {
+		return err
+	}
+	if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchAddrType(iptables.WithMatchAddrTypeDstType(false, iptables.LOCAL)).MatchProtocol(false, network.ProtocolUDP).MatchUDP(iptables.WithMatchUDPDstPort(true, 53)).TargetAccept().Append(); err != nil {
+		return err
+	}
+
+	for _, ignore := range builds.Config.Proxy.IgnoreList {
+		if (currentProto == "ipv4" && !common.IsIPv6(ignore)) || (currentProto == "ipv6" && common.IsIPv6(ignore)) {
+			if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchProtocol(false, network.ProtocolTCP).MatchDestination(false, ignore).TargetAccept().Append(); err != nil {
+				return err
+			}
+			if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchProtocol(false, network.ProtocolUDP).MatchDestination(false, ignore).TargetAccept().Append(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func setupProxyIpChain(ipv6 bool) error {
+	currentIpt := common.Ipt
+	currentProto := "ipv4"
+	if ipv6 {
+		currentIpt = common.Ipt6
+		currentProto = "ipv6"
+	}
+	
+	tproxyPort, _ := strconv.Atoi(builds.Config.Proxy.TproxyPort)
+	tproxyMark, _ := strconv.Atoi(common.TproxyMarkId)
+
+	chainOut := iptables.ChainTypeUserDefined
+	chainOut.SetName("PROXY_IP_OUT")
+	_ = currentIpt.Table(iptables.TableTypeMangle).NewChain("PROXY_IP_OUT")
+
+	chainPre := iptables.ChainTypeUserDefined
+	chainPre.SetName("PROXY_IP_PRE")
+	_ = currentIpt.Table(iptables.TableTypeMangle).NewChain("PROXY_IP_PRE")
+
+	for _, intra := range builds.Config.Proxy.IntraList {
+		if (currentProto == "ipv4" && !common.IsIPv6(intra)) || (currentProto == "ipv6" && common.IsIPv6(intra)) {
+			if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chainOut).MatchProtocol(false, network.ProtocolTCP).MatchDestination(false, intra).TargetMark(iptables.WithTargetMarkSetX(0x1000000, 0x1000000)).Append(); err != nil {
+				return err
+			}
+			if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chainOut).MatchProtocol(false, network.ProtocolUDP).MatchDestination(false, intra).TargetMark(iptables.WithTargetMarkSetX(0x1000000, 0x1000000)).Append(); err != nil {
+				return err
+			}
+			if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chainPre).MatchProtocol(false, network.ProtocolTCP).MatchDestination(false, intra).TargetTProxy(iptables.WithTargetTProxyOnPort(tproxyPort), iptables.WithTargetTProxyMark(tproxyMark, tproxyMark)).Append(); err != nil {
+				return err
+			}
+			if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chainPre).MatchProtocol(false, network.ProtocolUDP).MatchDestination(false, intra).TargetTProxy(iptables.WithTargetTProxyOnPort(tproxyPort), iptables.WithTargetTProxyMark(tproxyMark, tproxyMark)).Append(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func setupProxyInterfaceChain(ipv6 bool) error {
+	currentIpt := common.Ipt
+	if ipv6 {
+		currentIpt = common.Ipt6
+	}
+	chain := iptables.ChainTypeUserDefined
+	chain.SetName("PROXY_INTERFACE")
+	_ = currentIpt.Table(iptables.TableTypeMangle).NewChain("PROXY_INTERFACE")
+
+	for _, ap := range builds.Config.Proxy.ApList {
+		if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).MatchInInterface(false, ap).TargetReturn().Append(); err != nil {
+			return err
+		}
+	}
+	if err := currentIpt.Table(iptables.TableTypeMangle).Chain(chain).TargetAccept().Append(); err != nil {
+		return err
+	}
+	return nil
+}
